@@ -102,6 +102,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -123,7 +124,17 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="phantomtraffic.cpp" />
+    <ClCompile Include="mpi.cpp" />
+    <ClCompile Include="openmp.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="serial.cpp" />
+    <ClCompile Include="simulation.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="simulation.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="cuda.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,20 +1,56 @@
-// phantomtraffic.cpp : This file contains the 'main' function. Program execution begins and ends there.
-//
-
+#include "simulation.h"
 #include <iostream>
+#include <fstream>
+#include <iomanip>
+#include <omp.h>
 
 int main()
 {
-    std::cout << "Hello World!\n";
+    SimulationConfig config;
+
+    config.roadLength = 10000;
+    config.numVehicles = 2000;
+    config.maxSpeed = 5;
+    config.slowProbability = 0.2;
+    config.timeSteps = 5000;
+
+    std::cout << "Threads: " << omp_get_max_threads() << std::endl;
+
+    double serialTime = runSerial(config);
+    double openmpTime = runOpenMP(config);
+
+    double speedup = serialTime / openmpTime;
+
+    std::cout << std::fixed << std::setprecision(6);
+
+    std::cout << "Serial : " << serialTime << " s" << std::endl;
+    std::cout << "OpenMP : " << openmpTime << " s" << std::endl;
+    std::cout << "Speedup: " << speedup << "x" << std::endl;
+
+    // Export benchmark.csv
+    // TEST EXPORT
+    std::ofstream file("benchmark.txt", std::ios::trunc);
+
+    if (!file)
+    {
+        std::cerr << "Cannot open benchmark.txt for writing!" << std::endl;
+    }
+    else
+    {
+        std::cerr << "Writing benchmark.txt..." << std::endl;
+
+        file << "Serial=" << serialTime * 1000 << "\n";
+        file << "OpenMP=" << openmpTime * 1000 << "\n";
+        file << "CUDA=0\n";
+        file << "MPI=0\n";
+
+        file.flush();
+
+        std::cerr << "File state after flush: " << file.good() << std::endl;
+
+        file.close();
+
+        std::cerr << "benchmark.txt written successfully!" << std::endl;
+    }
+    return 0;
 }
-
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
-
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
