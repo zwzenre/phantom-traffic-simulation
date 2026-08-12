@@ -11,3 +11,4 @@ Release/
 *.tlog 
 *.exe 
 *.log
+phantomtraffic/CMakeLists.txt
