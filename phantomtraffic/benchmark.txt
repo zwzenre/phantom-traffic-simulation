@@ -1,4 +1,4 @@
-Serial=1299.15
-OpenMP=379.587
+Serial=706.003
+OpenMP=222.843
 CUDA=0
-MPI=0
+MPI=352.434
