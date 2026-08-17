@@ -1,0 +1,4 @@
+Serial=647.228
+OpenMP=104.537
+CUDA=0
+MPI=123.013
