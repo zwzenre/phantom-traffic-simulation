@@ -1,8 +1,5 @@
-//
-// Created by Ming on 12/8/2026.
-//
+#pragma once
 
-#ifndef PHANTOM_TRAFFIC_SIMULATION_CUDA_CUH
-#define PHANTOM_TRAFFIC_SIMULATION_CUDA_CUH
+#include "simulation.h"
 
-#endif //PHANTOM_TRAFFIC_SIMULATION_CUDA_CUH
+double runCUDA(const SimulationConfig& config);
