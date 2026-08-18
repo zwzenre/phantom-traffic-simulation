@@ -28,3 +28,4 @@ void printRoad(const std::vector<Vehicle>& vehicles,
 double runSerial(const SimulationConfig& config);
 double runOpenMP(const SimulationConfig& config);
 double runMPI(const SimulationConfig& config);
+double runCUDA(const SimulationConfig& config);

@@ -1,4 +1,5 @@
 #include "simulation.h"
+#include "cuda.cuh"
 #include <iostream>
 #include <fstream>
 #include <iomanip>
@@ -30,6 +31,7 @@ int main()
 
     double serialTime = 0.0;
     double openmpTime = 0.0;
+    double cudaTime = 0.0;
 
 	// if (mpiRank == 0), run the serial and OpenMP benchmarks only on the root process
     if (mpiRank == 0)
@@ -40,6 +42,7 @@ int main()
 
         serialTime = runSerial(config);
         openmpTime = runOpenMP(config);
+        cudaTime = runCUDA(config);
     }
 
 	// Run MPI benchmark on all processes
@@ -49,14 +52,17 @@ int main()
     {
         double speedup = serialTime / openmpTime;
         double mpiSpeedup = serialTime / mpiTime;
+        double cudaSpeedup = serialTime / cudaTime;
 
         std::cout << std::fixed << std::setprecision(6);
 
-        std::cout << "Serial : " << serialTime << " s" << std::endl;
+        std::cout << "Serial : " << serialTime << " s\n" << std::endl;
         std::cout << "OpenMP : " << openmpTime << " s" << std::endl;
-        std::cout << "Speedup: " << speedup << "x" << std::endl;
+        std::cout << "Speedup: " << speedup << "x\n" << std::endl;
         std::cout << "MPI    : " << mpiTime << " s" << std::endl;
-        std::cout << "MPI Speedup: " << mpiSpeedup << "x" << std::endl;
+        std::cout << "Speedup: " << mpiSpeedup << "x\n" << std::endl;
+        std::cout << "CUDA   : " << cudaTime << " s" << std::endl;
+        std::cout << "Speedup: " << cudaSpeedup << "x" << std::endl;
 
         // Export benchmark.csv
         // TEST EXPORT
@@ -72,7 +78,7 @@ int main()
 
             file << "Serial=" << serialTime * 1000 << "\n";
             file << "OpenMP=" << openmpTime * 1000 << "\n";
-            file << "CUDA=0\n";
+            file << "CUDA=" << cudaTime * 1000 << "\n";
             file << "MPI=" << mpiTime * 1000 << "\n";
 
             file.flush();
@@ -86,6 +92,6 @@ int main()
 	}
 
     MPI_Finalize();
-    
+
     return 0;
 }
