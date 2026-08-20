@@ -4,466 +4,2386 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.animation import FuncAnimation
 import numpy as np
 import pandas as pd
+import subprocess
+import os
+import re
+import shutil
 
+
+# ============================================================
 # THEME
+# ============================================================
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 app = ctk.CTk()
+
 app.title("Phantom Traffic Simulator")
+
 app.geometry("1500x900")
 app.minsize(1300, 800)
 
-# LOAD BENCHMARK
-def load_benchmark():
-    data = {
-        "Serial": 0.0,
-        "OpenMP": 0.0,
-        "CUDA": 0.0,
-        "MPI": 0.0
-    }
 
-    try:
-        with open("benchmark.txt", "r") as f:
-            for line in f:
-                line = line.strip()
+# ============================================================
+# PROJECT DIRECTORY
+# ============================================================
+#
+# This makes sure Python can find benchmark.exe even if
+# the program is launched from another working directory.
+#
 
-                if not line or "=" not in line:
-                    continue
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-                key, value = line.split("=")
+EXECUTABLE_CANDIDATES = [
+    os.path.join(BASE_DIR, "phantomtraffic.exe"),
+    os.path.join(BASE_DIR, "x64", "Release", "phantomtraffic.exe"),
+    os.path.join(BASE_DIR, "x64", "Debug", "phantomtraffic.exe"),
+]
 
-                if key in data:
-                    data[key] = float(value)
+MPI_PROCESSES = 4
 
-    except FileNotFoundError:
-        pass
 
-    return data
+# ============================================================
+# GLOBAL DATA
+# ============================================================
 
-bench = load_benchmark()
+labels = [
+    "Serial",
+    "OpenMP",
+    "CUDA",
+    "MPI"
+]
+
 
 backend_colors = {
+
     "Serial": "#4ea1ff",
+
     "OpenMP": "#4caf50",
+
     "CUDA": "#ff9800",
+
     "MPI": "#9c6bff"
 }
 
-def change_backend(choice):
-    backend_label.configure(
-        text=choice,
-        text_color=backend_colors[choice]
-    )
 
-    # Update thread/process information
-    if choice == "Serial":
-        threads_label.configure(text="Threads: 1")
-    elif choice == "OpenMP":
-        threads_label.configure(text="Threads: 16")
-    elif choice == "CUDA":
-        threads_label.configure(text="Threads: GPU")
-    elif choice == "MPI":
-        threads_label.configure(text="Threads: 4 processes")
+colors = [
 
-    # Update status based on available benchmark data
-    idx = labels.index(choice)
+    "#4ea1ff",
 
-    if runtime[idx] > 0:
-        status_info.configure(
-            text="Status: Measured",
-            text_color="#4caf50"
-        )
-    else:
-        status_info.configure(
-            text="Status: Pending",
-            text_color="#ff9800"
-        )
+    "#4caf50",
 
-labels = ["Serial", "OpenMP", "CUDA", "MPI"]
+    "#ff9800",
+
+    "#9c6bff"
+]
+
+
+# ============================================================
+# LIVE BENCHMARK DATA
+# ============================================================
+
+def find_executable():
+    return next((path for path in EXECUTABLE_CANDIDATES if os.path.exists(path)), None)
+
+
+def parse_benchmark_output(output):
+    """Read lines emitted by main.cpp: RESULT <backend> <milliseconds>."""
+    data = {label: 0.0 for label in labels}
+    pattern = re.compile(r"^RESULT\s+(Serial|OpenMP|CUDA|MPI)\s+([0-9]+(?:\.[0-9]+)?)$")
+
+    for line in output.splitlines():
+        match = pattern.match(line.strip())
+        if match:
+            data[match.group(1)] = float(match.group(2))
+
+    return data
+
+
+# ============================================================
+# INITIAL BENCHMARK DATA
+# ============================================================
+
+bench = {label: 0.0 for label in labels}
+
 
 runtime = [
+
     bench["Serial"],
+
     bench["OpenMP"],
+
     bench["CUDA"],
+
     bench["MPI"]
 ]
 
+
 speedup = [
-    1.0,
-    runtime[0] / runtime[1] if runtime[1] > 0 else 0,
-    runtime[0] / runtime[2] if runtime[2] > 0 else 0,
-    runtime[0] / runtime[3] if runtime[3] > 0 else 0
+
+    1.0
+    if runtime[0] > 0
+    else 0,
+
+    runtime[0] / runtime[1]
+    if runtime[0] > 0 and runtime[1] > 0
+    else 0,
+
+    runtime[0] / runtime[2]
+    if runtime[0] > 0 and runtime[2] > 0
+    else 0,
+
+    runtime[0] / runtime[3]
+    if runtime[0] > 0 and runtime[3] > 0
+    else 0
 ]
 
+
+# ============================================================
+# UPDATE LIVE BENCHMARK DATA
+# ============================================================
+
+def update_benchmark_data(data):
+
+    global bench
+    global runtime
+    global speedup
+
+
+    bench = data
+
+
+    # Update runtime values
+
+    runtime = [
+
+        bench["Serial"],
+
+        bench["OpenMP"],
+
+        bench["CUDA"],
+
+        bench["MPI"]
+    ]
+
+
+    # ========================================================
+    # SPEEDUP
+    # ========================================================
+    #
+    # Serial is the baseline.
+    #
+    # Speedup = Serial Runtime / Parallel Runtime
+    #
+
+    if runtime[0] > 0:
+
+        speedup = [
+
+            1.0,
+
+            runtime[0] / runtime[1]
+            if runtime[1] > 0
+            else 0,
+
+            runtime[0] / runtime[2]
+            if runtime[2] > 0
+            else 0,
+
+            runtime[0] / runtime[3]
+            if runtime[3] > 0
+            else 0
+        ]
+
+    else:
+
+        speedup = [
+            0,
+            0,
+            0,
+            0
+        ]
+
+
+    # Update dashboard
+
+    update_charts()
+
+    update_table()
+
+    change_backend(
+        backend_var.get()
+    )
+
+
+# ============================================================
+# RUN C++ BENCHMARK
+# ============================================================
+
+def run_cpp_benchmark():
+
+    try:
+
+        # ====================================================
+        # READ PARAMETERS
+        # ====================================================
+
+        road_length = int(
+            road_entry.get()
+        )
+
+        num_vehicles = int(
+            veh_entry.get()
+        )
+
+        max_speed = int(
+            speed_entry.get()
+        )
+
+
+        # ====================================================
+        # VALIDATION
+        # ====================================================
+
+        if road_length <= 0:
+
+            raise ValueError(
+                "Road length must be greater than 0."
+            )
+
+
+        if num_vehicles <= 0:
+
+            raise ValueError(
+                "Number of vehicles must be greater than 0."
+            )
+
+
+        if max_speed <= 0:
+
+            raise ValueError(
+                "Maximum speed must be greater than 0."
+            )
+
+
+        # ====================================================
+        # RESET SIMULATION VISUALIZATION
+        # ====================================================
+
+        reset_simulation()
+
+
+        # ====================================================
+        # STATUS
+        # ====================================================
+
+        status_info.configure(
+
+            text="Status: Running Benchmark...",
+
+            text_color="#00d4ff"
+        )
+
+
+        status.configure(
+
+            text=(
+                "Running C++ performance test..."
+            )
+        )
+
+
+        app.update()
+
+
+        # ====================================================
+        # CHECK EXECUTABLE
+        # ====================================================
+
+        executable_path = find_executable()
+
+        if executable_path is None:
+
+            status_info.configure(
+
+                text="Status: EXE Not Found",
+
+                text_color="#ff4444"
+            )
+
+
+            status.configure(
+
+                text=(
+                    "ERROR: phantomtraffic.exe was not found."
+                )
+            )
+
+
+            print(
+                "======================================"
+            )
+
+            print(
+                "ERROR: phantomtraffic.exe NOT FOUND"
+            )
+
+            print(
+                "Expected location:"
+            )
+
+            print(
+                "\\n".join(EXECUTABLE_CANDIDATES)
+            )
+
+            print(
+                "======================================"
+            )
+
+
+            return
+
+
+        # ====================================================
+        # C++ COMMAND
+        # ====================================================
+
+        command = [executable_path, str(road_length), str(num_vehicles), str(max_speed)]
+
+        # The same executable runs every method. Launch through mpiexec when
+        # available so runMPI measures the configured number of processes.
+        mpiexec = shutil.which("mpiexec") or shutil.which("mpiexec.exe")
+        if mpiexec:
+            command = [mpiexec, "-n", str(MPI_PROCESSES)] + command
+
+
+        print(
+            "\n======================================"
+        )
+
+        print(
+            "RUNNING C++ BENCHMARK"
+        )
+
+        print(
+            "======================================"
+        )
+
+        print(
+            "Executable:",
+            executable_path
+        )
+
+        print(
+            "Road Length:",
+            road_length
+        )
+
+        print(
+            "Vehicles:",
+            num_vehicles
+        )
+
+        print(
+            "Max Speed:",
+            max_speed
+        )
+
+        print(
+            "Command:",
+            command
+        )
+
+
+        # ====================================================
+        # RUN C++ PROGRAM
+        # ====================================================
+
+        result = subprocess.run(
+
+            command,
+
+            cwd=BASE_DIR,
+
+            capture_output=True,
+
+            text=True
+        )
+
+
+        # ====================================================
+        # C++ ERROR
+        # ====================================================
+
+        if result.returncode != 0:
+
+            print(
+                "\n========== C++ ERROR =========="
+            )
+
+            print(
+                result.stderr
+            )
+
+
+            status_info.configure(
+
+                text="Status: Benchmark Error",
+
+                text_color="#ff4444"
+            )
+
+
+            status.configure(
+
+                text=(
+                    "C++ benchmark failed. "
+                    "Check the terminal output."
+                )
+            )
+
+
+            return
+
+
+        # ====================================================
+        # C++ OUTPUT
+        # ====================================================
+
+        print(
+            "\n========== C++ OUTPUT =========="
+        )
+
+        print(
+            result.stdout
+        )
+
+
+        # ====================================================
+        # UPDATE LIVE BENCHMARK DATA
+        # ====================================================
+
+        measured = parse_benchmark_output(result.stdout)
+
+        if not any(measured.values()):
+            raise RuntimeError(
+                "The executable completed but did not return RESULT lines. "
+                "Rebuild it after updating main.cpp."
+            )
+
+        update_benchmark_data(measured)
+
+
+        # ====================================================
+        # COMPLETE
+        # ====================================================
+
+        status_info.configure(
+
+            text="Status: Benchmark Complete",
+
+            text_color="#4caf50"
+        )
+
+
+        status.configure(
+
+            text=(
+                f"Benchmark Complete   |   "
+                f"Vehicles: {num_vehicles}   |   "
+                f"Road: {road_length}   |   "
+                f"Max Speed: {max_speed}"
+            )
+        )
+
+
+    except ValueError as e:
+
+        status_info.configure(
+
+            text="Status: Invalid Parameters",
+
+            text_color="#ff4444"
+        )
+
+
+        status.configure(
+
+            text=f"Invalid parameters: {e}"
+        )
+
+
+    except Exception as e:
+
+        print(
+            "\n========== PYTHON ERROR =========="
+        )
+
+        print(
+            e
+        )
+
+
+        status_info.configure(
+
+            text="Status: Error",
+
+            text_color="#ff4444"
+        )
+
+
+# ============================================================
+# UPDATE CHARTS
+# ============================================================
+
+def update_charts():
+
+    # ========================================================
+    # RUNTIME CHART
+    # ========================================================
+
+    runtime_ax.clear()
+
+
+    runtime_ax.set_facecolor(
+        "#1f1f1f"
+    )
+
+
+    bars = runtime_ax.bar(
+
+        labels,
+
+        runtime,
+
+        color=colors
+    )
+
+
+    runtime_ax.tick_params(
+        colors="white"
+    )
+
+
+    runtime_ax.set_ylabel(
+
+        "Runtime (ms)",
+
+        color="white"
+    )
+
+
+    runtime_ax.set_title(
+
+        "Runtime Comparison",
+
+        color="white",
+
+        fontsize=11
+    )
+
+
+    runtime_ax.grid(
+
+        axis="y",
+
+        alpha=0.15
+    )
+
+
+    for spine in runtime_ax.spines.values():
+
+        spine.set_color(
+            "white"
+        )
+
+
+    max_runtime = max(
+        runtime
+    )
+
+
+    if max_runtime <= 0:
+
+        max_runtime = 1
+
+
+    for bar, value in zip(
+        bars,
+        runtime
+    ):
+
+        if value > 0:
+
+            runtime_ax.text(
+
+                bar.get_x()
+                + bar.get_width() / 2,
+
+                value
+                + max_runtime * 0.03,
+
+                f"{value:.2f}",
+
+                ha="center",
+
+                color="white",
+
+                fontsize=9
+            )
+
+
+    runtime_ax.set_ylim(
+
+        0,
+
+        max_runtime * 1.2
+    )
+
+
+    # ========================================================
+    # SPEEDUP CHART
+    # ========================================================
+
+    speed_ax.clear()
+
+
+    speed_ax.set_facecolor(
+        "#1f1f1f"
+    )
+
+
+    speed_ax.plot(
+
+        labels,
+
+        speedup,
+
+        marker="o",
+
+        linewidth=2.5,
+
+        color="#00d4ff"
+    )
+
+
+    speed_ax.tick_params(
+        colors="white"
+    )
+
+
+    speed_ax.set_ylabel(
+
+        "Speedup (x)",
+
+        color="white"
+    )
+
+
+    speed_ax.set_title(
+
+        "Speedup Comparison",
+
+        color="white",
+
+        fontsize=11
+    )
+
+
+    speed_ax.grid(
+
+        axis="y",
+
+        alpha=0.15
+    )
+
+
+    for spine in speed_ax.spines.values():
+
+        spine.set_color(
+            "white"
+        )
+
+
+    max_speedup = max(
+        speedup
+    )
+
+
+    if max_speedup <= 0:
+
+        max_speedup = 1
+
+
+    for x, y in zip(
+        labels,
+        speedup
+    ):
+
+        if y > 0:
+
+            speed_ax.text(
+
+                x,
+
+                y
+                + max_speedup * 0.05,
+
+                f"{y:.2f}x",
+
+                color="white",
+
+                ha="center",
+
+                fontsize=9
+            )
+
+
+    speed_ax.set_ylim(
+
+        0,
+
+        max_speedup * 1.25
+    )
+
+
+    runtime_fig.tight_layout()
+
+    speed_fig.tight_layout()
+
+
+    runtime_canvas.draw()
+
+    speed_canvas.draw()
+
+
+# ============================================================
+# UPDATE TABLE
+# ============================================================
+
+def update_table():
+
+    table.configure(
+        state="normal"
+    )
+
+
+    table.delete(
+        "1.0",
+        "end"
+    )
+
+
+    # ========================================================
+    # THROUGHPUT
+    # ========================================================
+
+    throughput = [
+
+        round(
+            1000 / x,
+            2
+        )
+        if x > 0
+        else 0
+
+        for x in runtime
+    ]
+
+
+    # ========================================================
+    # STATUS
+    # ========================================================
+
+    status_values = [
+
+        "Measured"
+        if x > 0
+        else "Pending"
+
+        for x in runtime
+    ]
+
+
+    # ========================================================
+    # DATAFRAME
+    # ========================================================
+
+    df = pd.DataFrame({
+
+        "Backend":
+            labels,
+
+        "Runtime (ms)":
+            [
+                round(x, 2)
+                for x in runtime
+            ],
+
+        "Throughput":
+            throughput,
+
+        "Speedup":
+            [
+                round(x, 2)
+                for x in speedup
+            ],
+
+        "Status":
+            status_values
+    })
+
+
+    table.insert(
+
+        "1.0",
+
+        df.to_string(
+            index=False
+        )
+    )
+
+
+    table.configure(
+        state="disabled"
+    )
+
+
+# ============================================================
+# BACKEND SELECTION
+# ============================================================
+
+def change_backend(choice):
+
+    backend_label.configure(
+
+        text=choice,
+
+        text_color=backend_colors[choice]
+    )
+
+
+    # ========================================================
+    # THREAD / PROCESS INFORMATION
+    # ========================================================
+
+    if choice == "Serial":
+
+        threads_label.configure(
+            text="Threads: 1"
+        )
+
+
+    elif choice == "OpenMP":
+
+        threads_label.configure(
+            text="Threads: 16"
+        )
+
+
+    elif choice == "CUDA":
+
+        threads_label.configure(
+            text="Threads: GPU"
+        )
+
+
+    elif choice == "MPI":
+
+        threads_label.configure(
+            text="Processes: 4"
+        )
+
+
+    # ========================================================
+    # BACKEND STATUS
+    # ========================================================
+
+    idx = labels.index(
+        choice
+    )
+
+
+    if runtime[idx] > 0:
+
+        status_info.configure(
+
+            text="Status: Measured",
+
+            text_color="#4caf50"
+        )
+
+    else:
+
+        status_info.configure(
+
+            text="Status: Pending",
+
+            text_color="#ff9800"
+        )
+
+
+# ============================================================
 # MAIN LAYOUT
-top_frame = ctk.CTkFrame(app, fg_color="transparent")
-top_frame.pack(fill="both", expand=True, padx=10, pady=10)
+# ============================================================
 
+top_frame = ctk.CTkFrame(
+
+    app,
+
+    fg_color="transparent"
+)
+
+
+top_frame.pack(
+
+    fill="both",
+
+    expand=True,
+
+    padx=10,
+
+    pady=10
+)
+
+
+# ============================================================
 # LEFT PANEL
-left = ctk.CTkFrame(top_frame, width=250, corner_radius=15)
-left.pack(side="left", fill="y", padx=(0, 10))
+# ============================================================
+
+left = ctk.CTkFrame(
+
+    top_frame,
+
+    width=250,
+
+    corner_radius=15
+)
+
+
+left.pack(
+
+    side="left",
+
+    fill="y",
+
+    padx=(0, 10)
+)
+
 
 ctk.CTkLabel(
+
     left,
+
     text="Control Panel",
+
     font=("Segoe UI", 24, "bold")
-).pack(pady=(20, 15))
 
-# Backend selector
+).pack(
+
+    pady=(20, 15)
+)
+
+
+# ============================================================
+# BACKEND SELECTOR
+# ============================================================
+
 ctk.CTkLabel(
-    left,
-    text="Backend",
-    font=("Segoe UI", 16, "bold")
-).pack(pady=(5, 8))
 
-backend_var = ctk.StringVar(value="OpenMP")
+    left,
+
+    text="Backend",
+
+    font=("Segoe UI", 16, "bold")
+
+).pack(
+
+    pady=(5, 8)
+)
+
+
+backend_var = ctk.StringVar(
+
+    value="OpenMP"
+)
+
 
 backend_menu = ctk.CTkOptionMenu(
+
     left,
-    values=["Serial", "OpenMP", "CUDA", "MPI"],
+
+    values=[
+        "Serial",
+        "OpenMP",
+        "CUDA",
+        "MPI"
+    ],
+
     variable=backend_var,
+
     width=170,
+
     command=change_backend
 )
-backend_menu.pack(padx=25, pady=(0, 15))
 
-# Info card
-info = ctk.CTkFrame(left, corner_radius=12)
-info.pack(fill="x", padx=18, pady=(5, 15))
+
+backend_menu.pack(
+
+    padx=25,
+
+    pady=(0, 15)
+)
+
+
+# ============================================================
+# INFO CARD
+# ============================================================
+
+info = ctk.CTkFrame(
+
+    left,
+
+    corner_radius=12
+)
+
+
+info.pack(
+
+    fill="x",
+
+    padx=18,
+
+    pady=(5, 15)
+)
+
 
 ctk.CTkLabel(
+
     info,
+
     text="Selected Backend",
+
     font=("Segoe UI", 13, "bold")
-).pack(anchor="w", padx=12, pady=(10, 2))
+
+).pack(
+
+    anchor="w",
+
+    padx=12,
+
+    pady=(10, 2)
+)
+
 
 backend_label = ctk.CTkLabel(
+
     info,
+
     text="OpenMP",
+
     font=("Segoe UI", 20, "bold"),
+
     text_color="#4caf50"
 )
-backend_label.pack(anchor="w", padx=12)
+
+
+backend_label.pack(
+
+    anchor="w",
+
+    padx=12
+)
+
 
 threads_label = ctk.CTkLabel(
+
     info,
-    text=f"Threads: - ",
+
+    text="Threads: 16",
+
     text_color="#bbbbbb"
 )
-threads_label.pack(anchor="w", padx=12, pady=(6, 0))
 
-road_info = ctk.CTkLabel(info, text="Road: 100 cells", text_color="#bbbbbb")
-road_info.pack(anchor="w", padx=12)
 
-veh_info = ctk.CTkLabel(info, text="Vehicles: 30", text_color="#bbbbbb")
-veh_info.pack(anchor="w", padx=12)
+threads_label.pack(
 
-speed_info = ctk.CTkLabel(info, text="Max Speed: 5", text_color="#bbbbbb")
-speed_info.pack(anchor="w", padx=12)
+    anchor="w",
 
-status_info = ctk.CTkLabel(info, text="Status: Ready", text_color="#4ea1ff")
-status_info.pack(anchor="w", padx=12, pady=(0, 10))
+    padx=12,
+
+    pady=(6, 0)
+)
+
+
+road_info = ctk.CTkLabel(
+
+    info,
+
+    text="Road: 100 cells",
+
+    text_color="#bbbbbb"
+)
+
+
+road_info.pack(
+
+    anchor="w",
+
+    padx=12
+)
+
+
+veh_info = ctk.CTkLabel(
+
+    info,
+
+    text="Vehicles: 30",
+
+    text_color="#bbbbbb"
+)
+
+
+veh_info.pack(
+
+    anchor="w",
+
+    padx=12
+)
+
+
+speed_info = ctk.CTkLabel(
+
+    info,
+
+    text="Max Speed: 5",
+
+    text_color="#bbbbbb"
+)
+
+
+speed_info.pack(
+
+    anchor="w",
+
+    padx=12
+)
+
+
+status_info = ctk.CTkLabel(
+
+    info,
+
+    text="Status: Ready",
+
+    text_color="#4ea1ff"
+)
+
+
+status_info.pack(
+
+    anchor="w",
+
+    padx=12,
+
+    pady=(0, 10)
+)
+
+
+# ============================================================
+# SIMULATION PARAMETERS
+# ============================================================
 
 ctk.CTkLabel(
-    left,
-    text="Simulation Parameters",
-    font=("Segoe UI", 16, "bold")
-).pack(pady=(20, 10))
 
-def labeled_entry(parent, label, default):
-    ctk.CTkLabel(parent, text=label).pack(anchor="w", padx=25, pady=(10, 4))
-    entry = ctk.CTkEntry(parent)
-    entry.insert(0, default)
-    entry.pack(fill="x", padx=25)
+    left,
+
+    text="Simulation Parameters",
+
+    font=("Segoe UI", 16, "bold")
+
+).pack(
+
+    pady=(20, 10)
+)
+
+
+def labeled_entry(
+    parent,
+    label,
+    default
+):
+
+    ctk.CTkLabel(
+
+        parent,
+
+        text=label
+
+    ).pack(
+
+        anchor="w",
+
+        padx=25,
+
+        pady=(10, 4)
+    )
+
+
+    entry = ctk.CTkEntry(
+        parent
+    )
+
+
+    entry.insert(
+        0,
+        default
+    )
+
+
+    entry.pack(
+
+        fill="x",
+
+        padx=25
+    )
+
+
     return entry
 
-road_entry = labeled_entry(left, "Road Length (cells)", "100")
-veh_entry = labeled_entry(left, "Number of Vehicles", "30")
-speed_entry = labeled_entry(left, "Max Speed (cells/step)", "5")
 
+road_entry = labeled_entry(
+
+    left,
+
+    "Road Length (cells)",
+
+    "100"
+)
+
+
+veh_entry = labeled_entry(
+
+    left,
+
+    "Number of Vehicles",
+
+    "30"
+)
+
+
+speed_entry = labeled_entry(
+
+    left,
+
+    "Max Speed (cells/step)",
+
+    "5"
+)
+
+
+# ============================================================
+# PERFORMANCE TEST BUTTON
+# ============================================================
+
+ctk.CTkButton(
+
+    left,
+
+    text="⚡ Run Performance Test",
+
+    width=200,
+
+    height=40,
+
+    command=run_cpp_benchmark
+
+).pack(
+
+    pady=(20, 10)
+)
+
+
+# ============================================================
 # CENTER PANEL
-center = ctk.CTkFrame(top_frame, corner_radius=15)
-center.pack(side="left", fill="both", expand=True, padx=(0, 10))
+# ============================================================
+
+center = ctk.CTkFrame(
+
+    top_frame,
+
+    corner_radius=15
+)
+
+
+center.pack(
+
+    side="left",
+
+    fill="both",
+
+    expand=True,
+
+    padx=(0, 10)
+)
+
 
 ctk.CTkLabel(
+
     center,
+
     text="Traffic Visualization",
+
     font=("Segoe UI", 24, "bold")
-).pack(pady=(15, 5))
 
-# Legend
-legend_frame = ctk.CTkFrame(center, fg_color="transparent")
-legend_frame.pack(pady=(0, 5))
+).pack(
 
-legend_colors = ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"]
-legend_labels = ["0", "1", "2", "3", "5"]
+    pady=(15, 5)
+)
 
-for c, t in zip(legend_colors, legend_labels):
+
+# ============================================================
+# LEGEND
+# ============================================================
+
+legend_frame = ctk.CTkFrame(
+
+    center,
+
+    fg_color="transparent"
+)
+
+
+legend_frame.pack(
+
+    pady=(0, 5)
+)
+
+
+legend_colors = [
+
+    "#440154",
+
+    "#3b528b",
+
+    "#21918c",
+
+    "#5ec962",
+
+    "#fde725"
+]
+
+
+legend_labels = [
+
+    "0",
+
+    "1",
+
+    "2",
+
+    "3",
+
+    "5"
+]
+
+
+for c, t in zip(
+
+    legend_colors,
+
+    legend_labels
+
+):
+
     dot = ctk.CTkLabel(
+
         legend_frame,
+
         text="●",
+
         text_color=c,
+
         font=("Segoe UI", 18)
     )
-    dot.pack(side="left", padx=(8, 2))
-    ctk.CTkLabel(legend_frame, text=t).pack(side="left", padx=(0, 6))
 
-# Matplotlib figure
-fig, ax = plt.subplots(figsize=(7.2, 7.2))
-fig.patch.set_facecolor("#1f1f1f")
-ax.set_facecolor("#1f1f1f")
-ax.set_aspect("equal")
-ax.axis("off")
 
-outer = plt.Circle((0, 0), 1.02, edgecolor="white", facecolor="none", linewidth=2)
-inner = plt.Circle((0, 0), 0.92, edgecolor="#777777", facecolor="none", linewidth=1)
+    dot.pack(
 
-ax.add_patch(outer)
-ax.add_patch(inner)
+        side="left",
 
-ax.set_xlim(-1.15, 1.15)
-ax.set_ylim(-1.15, 1.15)
+        padx=(8, 2)
+    )
+
+
+    ctk.CTkLabel(
+
+        legend_frame,
+
+        text=t
+
+    ).pack(
+
+        side="left",
+
+        padx=(0, 6)
+    )
+
+
+# ============================================================
+# TRAFFIC VISUALIZATION
+# ============================================================
+
+fig, ax = plt.subplots(
+
+    figsize=(7.2, 7.2)
+)
+
+
+fig.patch.set_facecolor(
+
+    "#1f1f1f"
+)
+
+
+ax.set_facecolor(
+
+    "#1f1f1f"
+)
+
+
+ax.set_aspect(
+
+    "equal"
+)
+
+
+ax.axis(
+    "off"
+)
+
+
+outer = plt.Circle(
+
+    (0, 0),
+
+    1.02,
+
+    edgecolor="white",
+
+    facecolor="none",
+
+    linewidth=2
+)
+
+
+inner = plt.Circle(
+
+    (0, 0),
+
+    0.92,
+
+    edgecolor="#777777",
+
+    facecolor="none",
+
+    linewidth=1
+)
+
+
+ax.add_patch(
+    outer
+)
+
+ax.add_patch(
+    inner
+)
+
+
+ax.set_xlim(
+
+    -1.15,
+
+    1.15
+)
+
+
+ax.set_ylim(
+
+    -1.15,
+
+    1.15
+)
+
 
 ROAD = 100
+
 N = 30
+
 MAX_SPEED = 5
 
-positions = np.linspace(0, ROAD - 1, N)
-velocities = np.zeros(N)
 
-theta = 2 * np.pi * positions / ROAD
+positions = np.linspace(
+
+    0,
+
+    ROAD - 1,
+
+    N
+)
+
+
+velocities = np.zeros(
+
+    N
+)
+
+
+theta = (
+
+    2 *
+
+    np.pi *
+
+    positions /
+
+    ROAD
+)
+
 
 scat = ax.scatter(
+
     np.cos(theta),
+
     np.sin(theta),
+
     c=velocities,
+
     cmap="plasma",
+
     vmin=0,
+
     vmax=MAX_SPEED,
+
     s=160,
+
     edgecolors="white",
+
     linewidths=1.2
 )
 
-canvas = FigureCanvasTkAgg(fig, master=center)
-canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
 
+canvas = FigureCanvasTkAgg(
+
+    fig,
+
+    master=center
+)
+
+
+canvas.get_tk_widget().pack(
+
+    fill="both",
+
+    expand=True,
+
+    padx=5,
+
+    pady=5
+)
+
+
+# ============================================================
 # SIMULATION CONTROL
+# ============================================================
+
 running = False
+
 paused = False
+
 frame_count = 0
 
+
+# ============================================================
+# REFRESH INFORMATION
+# ============================================================
+
 def refresh_info():
-    road_info.configure(text=f"Road: {road_entry.get()} cells")
-    veh_info.configure(text=f"Vehicles: {veh_entry.get()}")
-    speed_info.configure(text=f"Max Speed: {speed_entry.get()}")
+
+    road_info.configure(
+
+        text=(
+            f"Road: "
+            f"{road_entry.get()} cells"
+        )
+    )
+
+
+    veh_info.configure(
+
+        text=(
+            f"Vehicles: "
+            f"{veh_entry.get()}"
+        )
+    )
+
+
+    speed_info.configure(
+
+        text=(
+            f"Max Speed: "
+            f"{speed_entry.get()}"
+        )
+    )
+
+
+# ============================================================
+# RESET SIMULATION
+# ============================================================
 
 def reset_simulation():
-    global ROAD, N, MAX_SPEED
-    global positions, velocities, frame_count
 
-    ROAD = int(road_entry.get())
-    N = int(veh_entry.get())
-    MAX_SPEED = int(speed_entry.get())
+    global ROAD
+    global N
+    global MAX_SPEED
+    global positions
+    global velocities
+    global frame_count
 
-    positions = np.linspace(0, ROAD - 1, N)
-    velocities = np.zeros(N)
+
+    try:
+
+        ROAD = int(
+            road_entry.get()
+        )
+
+        N = int(
+            veh_entry.get()
+        )
+
+        MAX_SPEED = int(
+            speed_entry.get()
+        )
+
+
+        if ROAD <= 0:
+
+            return
+
+
+        if N <= 0:
+
+            return
+
+
+        if MAX_SPEED <= 0:
+
+            return
+
+
+    except ValueError:
+
+        return
+
+
+    positions = np.linspace(
+
+        0,
+
+        ROAD - 1,
+
+        N
+    )
+
+
+    velocities = np.zeros(
+        N
+    )
+
+
     frame_count = 0
 
-    theta = 2 * np.pi * positions / ROAD
-    coords = np.column_stack((np.cos(theta), np.sin(theta)))
 
-    scat.set_offsets(coords)
-    scat.set_array(velocities)
+    theta = (
+
+        2 *
+
+        np.pi *
+
+        positions /
+
+        ROAD
+    )
+
+
+    coords = np.column_stack(
+
+        (
+
+            np.cos(theta),
+
+            np.sin(theta)
+        )
+    )
+
+
+    scat.set_offsets(
+        coords
+    )
+
+
+    scat.set_array(
+        velocities
+    )
+
+
+    scat.set_clim(
+
+        0,
+
+        MAX_SPEED
+    )
+
 
     refresh_info()
 
+
     status.configure(
-        text=f"Ready   |   Vehicles: {N}   |   Average Speed: 0.00"
+
+        text=(
+
+            f"Ready   |   "
+
+            f"Vehicles: {N}   |   "
+
+            f"Average Speed: 0.00"
+        )
     )
+
 
     canvas.draw_idle()
 
+
+# ============================================================
+# START SIMULATION
+# ============================================================
+
 def start_simulation():
-    global running, paused
+
+    global running
+    global paused
+
+
     running = True
+
     paused = False
-    status_info.configure(text="Status: Running", text_color="#00d4ff")
+
+
+    status_info.configure(
+
+        text="Status: Running",
+
+        text_color="#00d4ff"
+    )
+
+
+# ============================================================
+# PAUSE SIMULATION
+# ============================================================
 
 def pause_simulation():
+
     global paused
+
+
     paused = not paused
 
+
     if paused:
-        status_info.configure(text="Status: Paused", text_color="#ff9800")
+
+        status_info.configure(
+
+            text="Status: Paused",
+
+            text_color="#ff9800"
+        )
+
     else:
-        status_info.configure(text="Status: Running", text_color="#00d4ff")
+
+        status_info.configure(
+
+            text="Status: Running",
+
+            text_color="#00d4ff"
+        )
+
+
+# ============================================================
+# STOP / RESET
+# ============================================================
 
 def stop_simulation():
-    global running, paused
+
+    global running
+    global paused
+
+
     running = False
+
     paused = False
-    status_info.configure(text="Status: Ready", text_color="#4ea1ff")
+
+
+    status_info.configure(
+
+        text="Status: Ready",
+
+        text_color="#4ea1ff"
+    )
+
+
     reset_simulation()
 
+
+# ============================================================
+# STEP SIMULATION
+# ============================================================
+
 def step_simulation():
-    global running, paused
+
+    global running
+    global paused
+
+
     running = True
+
     paused = False
+
+
     update(0)
+
+
     running = False
 
-# ANIMATION
+
+# ============================================================
+# TRAFFIC UPDATE
+# ============================================================
+
 def update(frame):
-    global positions, velocities, frame_count
+
+    global positions
+    global velocities
+    global frame_count
+
 
     if not running or paused:
+
         return scat,
+
 
     frame_count += 1
 
+
+    # ========================================================
+    # VEHICLE UPDATE
+    # ========================================================
+
     for i in range(N):
-        velocities[i] = min(velocities[i] + 1, MAX_SPEED)
 
-        nxt = (i + 1) % N
-        gap = (positions[nxt] - positions[i] - 1) % ROAD
+        # Acceleration
 
-        velocities[i] = min(velocities[i], gap)
+        velocities[i] = min(
 
-        if velocities[i] > 0 and np.random.rand() < 0.25:
+            velocities[i] + 1,
+
+            MAX_SPEED
+        )
+
+
+        # Vehicle ahead
+
+        nxt = (
+
+            i + 1
+
+        ) % N
+
+
+        gap = (
+
+            positions[nxt]
+
+            - positions[i]
+
+            - 1
+
+        ) % ROAD
+
+
+        # Braking
+
+        velocities[i] = min(
+
+            velocities[i],
+
+            gap
+        )
+
+
+        # Random slowdown
+
+        if (
+
+            velocities[i] > 0
+
+            and np.random.rand() < 0.25
+
+        ):
+
             velocities[i] -= 1
 
-    positions[:] = (positions + velocities) % ROAD
 
-    order = np.argsort(positions)
-    positions[:] = positions[order]
-    velocities[:] = velocities[order]
+    # ========================================================
+    # MOVEMENT
+    # ========================================================
 
-    theta = 2 * np.pi * positions / ROAD
-    coords = np.column_stack((np.cos(theta), np.sin(theta)))
+    positions[:] = (
 
-    scat.set_offsets(coords)
-    scat.set_array(velocities)
+        positions +
 
-    avg_speed = np.mean(velocities)
+        velocities
+
+    ) % ROAD
+
+
+    # ========================================================
+    # SORT VEHICLES
+    # ========================================================
+
+    order = np.argsort(
+
+        positions
+    )
+
+
+    positions[:] = positions[
+        order
+    ]
+
+
+    velocities[:] = velocities[
+        order
+    ]
+
+
+    # ========================================================
+    # CIRCULAR COORDINATES
+    # ========================================================
+
+    theta = (
+
+        2 *
+
+        np.pi *
+
+        positions /
+
+        ROAD
+    )
+
+
+    coords = np.column_stack(
+
+        (
+
+            np.cos(theta),
+
+            np.sin(theta)
+        )
+    )
+
+
+    scat.set_offsets(
+        coords
+    )
+
+
+    scat.set_array(
+        velocities
+    )
+
+
+    # ========================================================
+    # AVERAGE SPEED
+    # ========================================================
+
+    avg_speed = np.mean(
+
+        velocities
+    )
+
 
     status.configure(
-        text=f"Timestep: {frame_count}   |   Vehicles: {N}   |   Average Speed: {avg_speed:.2f}   |   Running"
+
+        text=(
+
+            f"Timestep: {frame_count}   |   "
+
+            f"Vehicles: {N}   |   "
+
+            f"Average Speed: {avg_speed:.2f}   |   "
+
+            f"Running"
+        )
     )
+
 
     return scat,
 
-ani = FuncAnimation(fig, update, interval=90, blit=True)
 
-# Controls
-controls = ctk.CTkFrame(center, fg_color="transparent")
-controls.pack(pady=(5, 12))
+ani = FuncAnimation(
 
-ctk.CTkButton(controls, text="▶ Start", width=90, command=start_simulation).pack(side="left", padx=6)
-ctk.CTkButton(controls, text="⏸ Pause", width=90, command=pause_simulation).pack(side="left", padx=6)
-ctk.CTkButton(controls, text="⏹ Reset", width=90, command=stop_simulation).pack(side="left", padx=6)
-ctk.CTkButton(controls, text="Step", width=80, command=step_simulation).pack(side="left", padx=6)
+    fig,
 
+    update,
+
+    interval=90,
+
+    blit=True
+)
+
+
+# ============================================================
+# SIMULATION BUTTONS
+# ============================================================
+
+controls = ctk.CTkFrame(
+
+    center,
+
+    fg_color="transparent"
+)
+
+
+controls.pack(
+
+    pady=(5, 12)
+)
+
+
+ctk.CTkButton(
+
+    controls,
+
+    text="▶ Start",
+
+    width=90,
+
+    command=start_simulation
+
+).pack(
+
+    side="left",
+
+    padx=6
+)
+
+
+ctk.CTkButton(
+
+    controls,
+
+    text="⏸ Pause",
+
+    width=90,
+
+    command=pause_simulation
+
+).pack(
+
+    side="left",
+
+    padx=6
+)
+
+
+ctk.CTkButton(
+
+    controls,
+
+    text="⏹ Reset",
+
+    width=90,
+
+    command=stop_simulation
+
+).pack(
+
+    side="left",
+
+    padx=6
+)
+
+
+ctk.CTkButton(
+
+    controls,
+
+    text="Step",
+
+    width=80,
+
+    command=step_simulation
+
+).pack(
+
+    side="left",
+
+    padx=6
+)
+
+
+# ============================================================
 # RIGHT PANEL
-right = ctk.CTkFrame(top_frame, width=420, corner_radius=15)
-right.pack(side="right", fill="y")
+# ============================================================
 
-colors = ["#4ea1ff", "#4caf50", "#ff9800", "#9c6bff"]
+right = ctk.CTkFrame(
 
-# Runtime chart
+    top_frame,
+
+    width=420,
+
+    corner_radius=15
+)
+
+
+right.pack(
+
+    side="right",
+
+    fill="y"
+)
+
+
+# ============================================================
+# RUNTIME CHART TITLE
+# ============================================================
+
 ctk.CTkLabel(
+
     right,
+
     text="Runtime Comparison",
+
     font=("Segoe UI", 18, "bold")
-).pack(pady=(18, 8))
 
-runtime_fig, runtime_ax = plt.subplots(figsize=(4.4, 3.0))
-runtime_fig.patch.set_facecolor("#1f1f1f")
-runtime_ax.set_facecolor("#1f1f1f")
+).pack(
 
-bars = runtime_ax.bar(labels, runtime, color=colors)
+    pady=(18, 8)
+)
 
-runtime_ax.tick_params(colors="white")
-runtime_ax.set_ylabel("ms", color="white")
 
-for spine in runtime_ax.spines.values():
-    spine.set_color("white")
+# ============================================================
+# RUNTIME CHART
+# ============================================================
 
-for b, v in zip(bars, runtime):
-    runtime_ax.text(
-        b.get_x() + b.get_width() / 2,
-        v + max(runtime) * 0.03,
-        f"{v:.2f}",
-        ha="center",
-        color="white",
-        fontsize=9
-    )
+runtime_fig, runtime_ax = plt.subplots(
 
-runtime_canvas = FigureCanvasTkAgg(runtime_fig, master=right)
-runtime_canvas.get_tk_widget().pack(padx=8, pady=5)
+    figsize=(4.4, 3.0)
+)
 
-# Speedup chart
+
+runtime_fig.patch.set_facecolor(
+
+    "#1f1f1f"
+)
+
+
+runtime_ax.set_facecolor(
+
+    "#1f1f1f"
+)
+
+
+runtime_canvas = FigureCanvasTkAgg(
+
+    runtime_fig,
+
+    master=right
+)
+
+
+runtime_canvas.get_tk_widget().pack(
+
+    padx=8,
+
+    pady=5
+)
+
+
+# ============================================================
+# SPEEDUP TITLE
+# ============================================================
+
 ctk.CTkLabel(
+
     right,
+
     text="Speedup Comparison",
+
     font=("Segoe UI", 18, "bold")
-).pack(pady=(15, 8))
 
-speed_fig, speed_ax = plt.subplots(figsize=(4.4, 3.0))
-speed_fig.patch.set_facecolor("#1f1f1f")
-speed_ax.set_facecolor("#1f1f1f")
+).pack(
 
-speed_ax.plot(labels, speedup, marker="o", linewidth=2.5, color="#00d4ff")
+    pady=(15, 8)
+)
 
-speed_ax.tick_params(colors="white")
-speed_ax.set_ylabel("Speedup (x)", color="white")
 
-for spine in speed_ax.spines.values():
-    spine.set_color("white")
+# ============================================================
+# SPEEDUP CHART
+# ============================================================
 
-for x, y in zip(labels, speedup):
-    speed_ax.text(x, y + 0.15, f"{y:.2f}x", color="white", ha="center", fontsize=9)
+speed_fig, speed_ax = plt.subplots(
 
-speed_canvas = FigureCanvasTkAgg(speed_fig, master=right)
-speed_canvas.get_tk_widget().pack(padx=8, pady=5)
+    figsize=(4.4, 3.0)
+)
 
-# BOTTOM TABLE
 
-bottom = ctk.CTkFrame(app, corner_radius=15)
-bottom.pack(fill="x", padx=10, pady=(0, 10))
+speed_fig.patch.set_facecolor(
+
+    "#1f1f1f"
+)
+
+
+speed_ax.set_facecolor(
+
+    "#1f1f1f"
+)
+
+
+speed_canvas = FigureCanvasTkAgg(
+
+    speed_fig,
+
+    master=right
+)
+
+
+speed_canvas.get_tk_widget().pack(
+
+    padx=8,
+
+    pady=5
+)
+
+
+# ============================================================
+# BOTTOM PERFORMANCE TABLE
+# ============================================================
+
+bottom = ctk.CTkFrame(
+
+    app,
+
+    corner_radius=15
+)
+
+
+bottom.pack(
+
+    fill="x",
+
+    padx=10,
+
+    pady=(0, 10)
+)
+
 
 ctk.CTkLabel(
+
     bottom,
+
     text="Performance Summary",
+
     font=("Segoe UI", 18, "bold")
-).pack(pady=(10, 5))
 
-table = ctk.CTkTextbox(bottom, height=140, font=("Consolas", 13))
-table.pack(fill="x", padx=15, pady=(0, 10))
+).pack(
 
-df = pd.DataFrame({
-    "Backend": labels,
-    "Runtime (ms)": runtime,
-    "Throughput": [round(1000 / x, 2) if x > 0 else 0 for x in runtime],
-    "Speedup": speedup,
-    "Status": ["Measured" if x > 0 else "Pending" for x in runtime]
-})
+    pady=(10, 5)
+)
 
-table.insert("1.0", df.to_string(index=False))
-table.configure(state="disabled")
 
+table = ctk.CTkTextbox(
+
+    bottom,
+
+    height=140,
+
+    font=("Consolas", 13)
+)
+
+
+table.pack(
+
+    fill="x",
+
+    padx=15,
+
+    pady=(0, 10)
+)
+
+
+# ============================================================
 # STATUS BAR
+# ============================================================
+
 status = ctk.CTkLabel(
+
     app,
-    text="Ready   |   Vehicles: 30   |   Average Speed: 0.00",
+
+    text=(
+
+        "Ready   |   "
+
+        "Vehicles: 30   |   "
+
+        "Average Speed: 0.00"
+    ),
+
     anchor="w",
+
     font=("Segoe UI", 12)
 )
-status.pack(fill="x", padx=15, pady=(0, 8))
 
-# Initialize
+
+status.pack(
+
+    fill="x",
+
+    padx=15,
+
+    pady=(0, 8)
+)
+
+
+# ============================================================
+# INITIALIZE DASHBOARD
+# ============================================================
+
 reset_simulation()
-change_backend(backend_var.get())
+
+update_charts()
+
+update_table()
+
+change_backend(
+    backend_var.get()
+)
+
+
+# ============================================================
+# START APPLICATION
+# ============================================================
 
 app.mainloop()

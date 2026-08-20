@@ -1,16 +1,17 @@
 #include "simulation.h"
 #include "cuda.cuh"
 #include <iostream>
-#include <fstream>
 #include <iomanip>
+#include <stdexcept>
+#include <string>
 
 #include <omp.h>
 #include <mpi.h>
 
-int main()
+int main(int argc, char* argv[])
 {
-	// Initialize MPI
-    MPI_Init(nullptr, nullptr);
+    // Initialize MPI
+    MPI_Init(&argc, &argv);
 
     int mpiRank = 0;
     int mpiProcesses = 1;
@@ -26,6 +27,38 @@ int main()
     config.maxSpeed = 5;
     config.slowProbability = 0.2;
     config.timeSteps = 5000;
+
+    // Optional command line input from dashboard.py:
+    // phantomtraffic.exe <roadLength> <vehicleCount> <maxSpeed>
+    if (argc == 4)
+    {
+        try
+        {
+            config.roadLength = std::stoi(argv[1]);
+            config.numVehicles = std::stoi(argv[2]);
+            config.maxSpeed = std::stoi(argv[3]);
+        }
+        catch (const std::exception&)
+        {
+            if (mpiRank == 0)
+            {
+                std::cerr << "ERROR: Parameters must be integers.\n";
+            }
+            MPI_Finalize();
+            return 1;
+        }
+    }
+
+    if (config.roadLength <= 0 || config.numVehicles <= 0 ||
+        config.numVehicles > config.roadLength || config.maxSpeed <= 0)
+    {
+        if (mpiRank == 0)
+        {
+            std::cerr << "ERROR: Require roadLength > 0, 0 < vehicleCount <= roadLength, and maxSpeed > 0.\n";
+        }
+        MPI_Finalize();
+        return 1;
+    }
 
     //std::cout << "Threads: " << omp_get_max_threads() << std::endl;
 
@@ -50,45 +83,14 @@ int main()
 
     if (mpiRank == 0)
     {
-        double speedup = serialTime / openmpTime;
-        double mpiSpeedup = serialTime / mpiTime;
-        double cudaSpeedup = serialTime / cudaTime;
-
         std::cout << std::fixed << std::setprecision(6);
 
-        std::cout << "Serial : " << serialTime << " s\n" << std::endl;
-        std::cout << "OpenMP : " << openmpTime << " s" << std::endl;
-        std::cout << "Speedup: " << speedup << "x\n" << std::endl;
-        std::cout << "MPI    : " << mpiTime << " s" << std::endl;
-        std::cout << "Speedup: " << mpiSpeedup << "x\n" << std::endl;
-        std::cout << "CUDA   : " << cudaTime << " s" << std::endl;
-        std::cout << "Speedup: " << cudaSpeedup << "x" << std::endl;
-
-        // Export benchmark.csv
-        // TEST EXPORT
-        std::ofstream file("benchmark.txt", std::ios::trunc);
-
-        if (!file)
-        {
-            std::cerr << "Cannot open benchmark.txt for writing!" << std::endl;
-        }
-        else
-        {
-            std::cerr << "Writing benchmark.txt..." << std::endl;
-
-            file << "Serial=" << serialTime * 1000 << "\n";
-            file << "OpenMP=" << openmpTime * 1000 << "\n";
-            file << "CUDA=" << cudaTime * 1000 << "\n";
-            file << "MPI=" << mpiTime * 1000 << "\n";
-
-            file.flush();
-
-            std::cerr << "File state after flush: " << file.good() << std::endl;
-
-            file.close();
-
-            std::cerr << "benchmark.txt written successfully!" << std::endl;
-        }
+        // Stable machine-readable output for the Python dashboard.
+        // Values are milliseconds; no benchmark.txt is created or read.
+        std::cout << "RESULT Serial " << serialTime * 1000.0 << "\n";
+        std::cout << "RESULT OpenMP " << openmpTime * 1000.0 << "\n";
+        std::cout << "RESULT CUDA " << cudaTime * 1000.0 << "\n";
+        std::cout << "RESULT MPI " << mpiTime * 1000.0 << "\n";
 	}
 
     MPI_Finalize();
