@@ -25,12 +25,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 
 EXECUTABLE_CANDIDATES = [
-    os.path.join(BASE_DIR, "cmake-build-debug", "phantomtraffic.exe"),
+    os.path.join(PROJECT_ROOT, "x64", "Release", "phantomtraffic.exe"),
     os.path.join(BASE_DIR, "cmake-build-release", "phantomtraffic.exe"),
     os.path.join(BASE_DIR, "build", "phantomtraffic.exe"),
-
-    os.path.join(PROJECT_ROOT, "x64", "Release", "phantomtraffic.exe"),
     os.path.join(PROJECT_ROOT, "x64", "Debug", "phantomtraffic.exe"),
+    os.path.join(BASE_DIR, "cmake-build-debug", "phantomtraffic.exe"),
     os.path.join(BASE_DIR, "phantomtraffic.exe"),
 ]
 
