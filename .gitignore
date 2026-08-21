@@ -1,4 +1,5 @@
-.vs/ 
+.vs/
+.idea/
 x64/ 
 Debug/ 
 Release/ 
@@ -11,3 +12,4 @@ Release/
 *.tlog 
 *.exe 
 *.log
+phantomtraffic/CMakeLists.txt
