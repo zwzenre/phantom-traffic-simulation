@@ -10,7 +10,6 @@
 
 int main(int argc, char* argv[])
 {
-    // Initialize MPI
     MPI_Init(&argc, &argv);
 
     int mpiRank = 0;
@@ -18,7 +17,6 @@ int main(int argc, char* argv[])
 
     MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
     MPI_Comm_size(MPI_COMM_WORLD, &mpiProcesses);
-    //================================================
 
     SimulationConfig config;
 
@@ -28,8 +26,6 @@ int main(int argc, char* argv[])
     config.slowProbability = 0.2;
     config.timeSteps = 5000;
 
-    // Optional command line input from dashboard.py:
-    // phantomtraffic.exe <roadLength> <vehicleCount> <maxSpeed>
     if (argc == 4)
     {
         try
@@ -60,13 +56,10 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    //std::cout << "Threads: " << omp_get_max_threads() << std::endl;
-
     double serialTime = 0.0;
     double openmpTime = 0.0;
     double cudaTime = 0.0;
 
-	// if (mpiRank == 0), run the serial and OpenMP benchmarks only on the root process
     if (mpiRank == 0)
     {
         std::cout << "Threads: " << omp_get_max_threads() << std::endl;
@@ -85,8 +78,7 @@ int main(int argc, char* argv[])
     {
         std::cout << std::fixed << std::setprecision(6);
 
-        // Stable machine-readable output for the Python dashboard.
-        // Values are milliseconds; no benchmark.txt is created or read.
+        // Result output in milliseconds
         std::cout << "RESULT Serial " << serialTime * 1000.0 << "\n";
         std::cout << "RESULT OpenMP " << openmpTime * 1000.0 << "\n";
         std::cout << "RESULT CUDA " << cudaTime * 1000.0 << "\n";

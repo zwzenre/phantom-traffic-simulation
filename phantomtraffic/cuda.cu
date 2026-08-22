@@ -22,7 +22,7 @@ namespace
         return value < threshold;
     }
 
-    // High-occupancy CUDA Kernel with Structure of Arrays (SoA) layout
+    // High-occupancy CUDA Kernel with SoA layout
     __global__ void __launch_bounds__(256, 4) stepTrafficKernelSoA(
             const int* __restrict__ pos_curr,
             const int* __restrict__ vel_curr,
@@ -96,7 +96,7 @@ double runCUDA(const SimulationConfig& config)
 
     const size_t bytesInt = config.numVehicles * sizeof(int);
 
-    // 2. Allocate Device Memory (SoA layout)
+    // 2. Allocate Device Memory with SoA layout
     int *d_pos_curr = nullptr, *d_pos_next = nullptr;
     int *d_vel_curr = nullptr, *d_vel_next = nullptr;
 
