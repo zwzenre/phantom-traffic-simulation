@@ -605,6 +605,7 @@ def labeled_entry(parent, label, default):
 road_entry = labeled_entry(left, "Road Length (cells)", "100")
 veh_entry = labeled_entry(left, "Number of Vehicles", "30")
 speed_entry = labeled_entry(left, "Max Speed (cells/step)", "5")
+steps_entry = labeled_entry(left, "Simulation Steps", "500")
 
 openmp_entry = labeled_entry(
     left,
@@ -661,13 +662,6 @@ ctk.CTkLabel(
     font=("Segoe UI", 24, "bold")
 ).pack(pady=(15, 5))
 
-ctk.CTkLabel(
-    center,
-    text="Four-loop junction model • visualization only • not included in benchmark timing",
-    text_color="#9aa0a6",
-    font=("Segoe UI", 11)
-).pack(pady=(0, 3))
-
 # ============================================================
 # LEGEND
 # ============================================================
@@ -691,6 +685,22 @@ for c, t in zip(legend_colors, legend_labels):
         legend_frame,
         text=t
     ).pack(side="left", padx=(0, 6))
+
+progress_label = ctk.CTkLabel(
+    center,
+    text="Simulation Progress: 0 / 500",
+    font=("Segoe UI", 13, "bold"),
+    anchor="w"
+)
+progress_label.pack(fill="x", padx=12, pady=(2, 3))
+
+progress_bar = ctk.CTkProgressBar(
+    center,
+    height=10,
+    corner_radius=5
+)
+progress_bar.pack(fill="x", padx=12, pady=(0, 7))
+progress_bar.set(0)
 
 # ============================================================
 # TRAFFIC VISUALIZATION
@@ -788,6 +798,7 @@ canvas.get_tk_widget().pack(
 running = False
 paused = False
 frame_count = 0
+simulation_steps = 500
 
 def refresh_info():
     road_info.configure(text=f"Road: 4 × {road_entry.get()} cells")
@@ -920,16 +931,43 @@ def find_crossing_candidate(
 
     return best_candidate
 
+def update_progress_display():
+    current = min(frame_count, simulation_steps)
+    total = simulation_steps
+
+    progress_label.configure(
+        text=f"Simulation Progress: {current} / {total}"
+    )
+
+    if total > 0:
+        progress_bar.set(current / total)
+    else:
+        progress_bar.set(0)
+
+    if current >= total:
+        progress_label.configure(
+            text=f"Simulation Progress: {total} / {total} • Complete"
+        )
+
 def reset_simulation():
-    global ROAD, N, MAX_SPEED, loop_positions, loop_velocities
+    global ROAD, N, MAX_SPEED, simulation_steps
+    global loop_positions, loop_velocities
     global junctions, junction_states, visual_rng, frame_count
+    global running, paused
 
     try:
         ROAD = int(road_entry.get())
         N = int(veh_entry.get())
         MAX_SPEED = int(speed_entry.get())
+        simulation_steps = int(steps_entry.get())
 
-        if ROAD <= 0 or N <= 0 or MAX_SPEED <= 0 or N > ROAD:
+        if (
+            ROAD <= 0
+            or N <= 0
+            or MAX_SPEED <= 0
+            or simulation_steps <= 0
+            or N > LOOP_COUNT * ROAD
+        ):
             return
     except ValueError:
         return
@@ -957,6 +995,9 @@ def reset_simulation():
         for loop_id in range(LOOP_COUNT)
     ]
     frame_count = 0
+    running = False
+    paused = False
+    update_progress_display()
 
     coords, displayed_velocities, displayed_colors = get_visual_state()
 
@@ -966,13 +1007,18 @@ def reset_simulation():
     refresh_info()
 
     status.configure(
-        text=f"Ready   |   Vehicles: {N}   |   Average Speed: 0.00"
+        text=f"Timestep: 0 / {simulation_steps}   |   Vehicles: {N}   |   "
+             f"Average Speed: 0.00   |   Ready"
     )
 
     canvas.draw_idle()
 
 def start_simulation():
     global running, paused
+
+    if frame_count >= simulation_steps:
+        reset_simulation()
+
     running = True
     paused = False
 
@@ -1010,19 +1056,44 @@ def stop_simulation():
 
 def step_simulation():
     global running, paused
+    if frame_count >= simulation_steps:
+        return
+
+    was_running = running
+    was_paused = paused
     running = True
     paused = False
     update(0)
-    running = False
+    running = was_running
+    paused = was_paused
+
+    if frame_count >= simulation_steps:
+        running = False
+        paused = False
+        status_info.configure(
+            text="Status: Complete",
+            text_color="#4caf50"
+        )
 
 def update(frame):
     global loop_positions, loop_velocities
     global junction_states, frame_count
+    global running, paused
 
     if not running or paused:
         return scat,
 
+    if frame_count >= simulation_steps:
+        running = False
+        paused = False
+        status_info.configure(
+            text="Status: Complete",
+            text_color="#4caf50"
+        )
+        return scat,
+
     frame_count += 1
+    update_progress_display()
 
     proposed_velocities = []
 
@@ -1165,13 +1236,25 @@ def update(frame):
         else 0.0
     )
 
+    complete = frame_count >= simulation_steps
+
     status.configure(
         text=(
-            f"Timestep: {frame_count}   |   Vehicles: {N}   |   "
-            f"Average Speed: {avg_speed:.2f}   |   "
-            f"Junction Waits: {waiting_vehicles}   |   Running"
+            f"Timestep: {frame_count} / {simulation_steps}   |   "
+            f"Vehicles: {N}   |   Average Speed: {avg_speed:.2f}   |   "
+            f"Junction Waits: {waiting_vehicles}   |   "
+            f"{'Complete' if complete else 'Running'}"
         )
     )
+
+    if complete:
+        running = False
+        paused = False
+        update_progress_display(complete=True)
+        status_info.configure(
+            text="Status: Complete",
+            text_color="#4caf50"
+        )
 
     return scat,
 
