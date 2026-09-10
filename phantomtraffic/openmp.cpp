@@ -15,11 +15,9 @@ double runOpenMP(const SimulationConfig& config)
 
     double start = omp_get_wtime();
 
-    // Keep one OpenMP team alive for the entire simulation.  Creating a new
-    // team at every timestep adds unnecessary fork/join overhead.
 #pragma omp parallel
     {
-        // Every thread owns its random generator, so no locking is required.
+        // Every thread owns its random generator
         std::mt19937 rng(42 + omp_get_thread_num());
         std::uniform_real_distribution<double> dist(0.0, 1.0);
 
@@ -33,8 +31,6 @@ double runOpenMP(const SimulationConfig& config)
                 v = std::min(v + 1, config.maxSpeed);
 
                 // Braking
-                // Inline gap calculation avoids a function call in the
-                // hottest loop of the simulation.
                 const int nextIndex =
                     (i + 1 == config.numVehicles) ? 0 : i + 1;
                 int gap = current[nextIndex].position -
@@ -55,9 +51,6 @@ double runOpenMP(const SimulationConfig& config)
                     (current[i].position + v) % config.roadLength;
             }
 
-            // Exactly one thread swaps the completed next-state buffer into
-            // place. The implicit barrier guarantees all threads see the
-            // new state before the next timestep begins.
 #pragma omp single
             {
                 current.swap(next);
