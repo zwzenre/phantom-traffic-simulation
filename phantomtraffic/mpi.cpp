@@ -11,8 +11,7 @@ namespace
 {
     constexpr int boundaryTag = 0;
 
-    // Return the same deterministic 32-bit random value as the
-    // original deterministicRandom(), without converting it to double.
+    // Deterministic 32-bit random value as the original deterministicRandom(), without converting it to double
     inline std::uint32_t deterministicRandomBits(
         int timeStep,
         int vehicleIndex)
@@ -36,8 +35,7 @@ namespace
         return value;
     }
 
-    // Convert the probability once before the simulation.
-    // This avoids floating-point division/comparison for every vehicle.
+    // Convert the probability once before simulation
     std::uint64_t makeSlowdownThreshold(double probability)
     {
         constexpr std::uint64_t randomRange =
@@ -102,9 +100,6 @@ namespace
         int newPosition =
             vehicle.position + velocity;
 
-        // After braking:
-        // velocity <= gap <= roadLength - 1.
-        // Therefore the vehicle can wrap at most once.
         if (newPosition >= roadLength)
         {
             newPosition -= roadLength;
@@ -208,8 +203,6 @@ double runMPI(const SimulationConfig& config)
             localVehicleCount
         );
 
-        // next will be completely overwritten during every step.
-        // There is no need to copy current into it.
         next.resize(
             localVehicleCount
         );
@@ -239,8 +232,6 @@ double runMPI(const SimulationConfig& config)
             config.slowProbability
         );
 
-    // Synchronize only before timing so every process starts
-    // the benchmark from approximately the same point.
     MPI_Barrier(
         MPI_COMM_WORLD
     );
@@ -262,12 +253,10 @@ double runMPI(const SimulationConfig& config)
             timeStep < config.timeSteps;
             ++timeStep)
         {
-            // For one process, the next partition is ourselves.
+            // For one process, the next partition is ourselves
             int followingFirstPosition =
                 current.front().position;
 
-            // Avoid MPI self-communication when running with
-            // only one active process.
             if (processCount > 1)
             {
                 const int firstPosition =
@@ -291,11 +280,7 @@ double runMPI(const SimulationConfig& config)
                 );
             }
 
-            // All vehicles except the final local vehicle use
-            // the position of another locally stored vehicle.
-            
-            // Processing the boundary vehicle separately removes
-            // one conditional branch from this hot loop.
+            // Processing the boundary vehicle separately removes one conditional branch from this hot loop
             for (int i = 0;
                 i + 1 < localVehicleCount;
                 ++i)
@@ -312,8 +297,7 @@ double runMPI(const SimulationConfig& config)
                 );
             }
 
-            // The final local vehicle depends on the first vehicle
-            // stored by the following MPI process.
+            // The final local vehicle depends on the first vehicle stored by the following MPI process
             const int lastLocalIndex =
                 localVehicleCount - 1;
 
@@ -338,8 +322,6 @@ double runMPI(const SimulationConfig& config)
 
     double maximumElapsed = 0.0;
 
-    // Allreduce already synchronizes all processes.
-    // The previous MPI_Barrier before this call was redundant.
     MPI_Allreduce(
         &localElapsed,
         &maximumElapsed,
